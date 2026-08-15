@@ -1,7 +1,53 @@
 {
   "name": "personal-workbench",
-  "version": "1.0.0",
+  "version": "1.16.0",
   "description": "个人工作台 - 工作生活一体化本地管理",
   "main": "main.js",
-  "author": "个人自用"
+  "author": "个人自用",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable",
+    "build:nsis": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.personal.workbench",
+    "productName": "个人工作台",
+    "copyright": "Copyright © 2026 个人自用",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "app.js",
+      "styles.css",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "个人工作台",
+      "artifactName": "个人工作台_v${version}_setup.exe"
+    },
+    "portable": {
+      "artifactName": "个人工作台_v${version}_portable.exe"
+    }
+  }
 }

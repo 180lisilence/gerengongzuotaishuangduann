@@ -7,6 +7,15 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div class="splash-screen" id="splash-screen">
+  <div class="splash-content">
+    <div class="splash-illustration">🐰 📚 🌳</div>
+    <div class="splash-title">让成长发生蜕变··</div>
+    <div class="splash-subtitle">Better And Better</div>
+  </div>
+  <div class="splash-brand">🍅 番茄计划</div>
+</div>
+
 <div class="app">
   <aside class="sidebar">
     <div class="logo">
@@ -71,6 +80,35 @@
     <button id="ai-quick-send" class="btn btn-primary btn-sm">发送</button>
   </div>
 </div>
+
+<!-- 底部导航栏（日程中心） -->
+<nav class="bottom-nav" id="bottom-nav" style="display:none">
+  <a class="bottom-nav-item" data-bnav="schedule" href="#/schedule">
+    <div class="bnav-icon">📅</div>
+    <div class="bnav-label">计划</div>
+  </a>
+  <a class="bottom-nav-item" data-bnav="calendar" href="#/calendar">
+    <div class="bnav-icon">🗓️</div>
+    <div class="bnav-label">视图</div>
+  </a>
+  <a class="bottom-nav-item" data-bnav="focus" href="#/focus">
+    <div class="bnav-icon">⏱️</div>
+    <div class="bnav-label">专注</div>
+  </a>
+  <a class="bottom-nav-item" data-bnav="stats" href="#/stats">
+    <div class="bnav-icon">📊</div>
+    <div class="bnav-label">统计</div>
+  </a>
+  <a class="bottom-nav-item" data-bnav="profile" href="#/profile">
+    <div class="bnav-icon">🐰</div>
+    <div class="bnav-label">我的</div>
+  </a>
+</nav>
+
+<!-- 悬浮添加按钮（日程中心） -->
+<button class="fab-add" id="fab-add" style="display:none">
+  <span>＋</span>
+</button>
 
 <script src="app.js"></script>
 </body>

@@ -40,8 +40,8 @@ const U = {
 };
 
 const DB_NAME = 'personal_workbench';
-const DB_VERSION = 3;
-const STORES = ['todos','media','develop','consult','fitness','diet','game','notes','recycleBin','config','aiConvs','aiMsgs'];
+const DB_VERSION = 4;
+const STORES = ['todos','media','develop','consult','fitness','diet','game','notes','recycleBin','config','aiConvs','aiMsgs','focus'];
 const STORE_LABELS = { todos:'今日计划', media:'自媒体', develop:'开发工作', consult:'咨询工作', fitness:'健身计划', diet:'饮食计划', game:'游戏娱乐', notes:'快速备忘', aiConvs:'AI 对话' };
 
 let DB = null;
@@ -276,6 +276,39 @@ function navigate() {
   document.getElementById('page-title').textContent = info ? info.title : '个人工作台';
   const content = document.getElementById('content');
   content.innerHTML = '';
+  
+  // 更新底部导航状态
+  const nav = document.getElementById('bottom-nav');
+  const fab = document.getElementById('fab-add');
+  if (nav) {
+    nav.querySelectorAll('.bottom-nav-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.bnav === route);
+    });
+  }
+  
+  // 日程中心路由的显示控制
+  const cuteRoutes = ['schedule', 'calendar', 'focus', 'stats'];
+  if (cuteRoutes.includes(route)) {
+    document.body.classList.add('schedule-mode');
+    if (nav) nav.style.display = 'flex';
+    if (fab) {
+      if (route === 'schedule' || route === 'calendar') {
+        fab.style.display = 'flex';
+      } else {
+        fab.style.display = 'none';
+      }
+    }
+  } else if (route === 'profile') {
+    // profile 路由也显示底部导航
+    document.body.classList.add('schedule-mode');
+    if (nav) nav.style.display = 'flex';
+    if (fab) fab.style.display = 'none';
+  } else {
+    document.body.classList.remove('schedule-mode');
+    if (nav) nav.style.display = 'none';
+    if (fab) fab.style.display = 'none';
+  }
+  
   if (info) {
     Promise.resolve(info.handler(content, rest)).catch(e => {
       console.error(e); Toast.err('渲染出错：' + e.message);
@@ -284,6 +317,23 @@ function navigate() {
 }
 
 window.addEventListener('hashchange', navigate);
+
+// ============ 启动闪屏 ============
+(function initSplashScreen() {
+  const splashKey = 'splash_shown';
+  if (sessionStorage.getItem(splashKey)) {
+    const el = document.getElementById('splash-screen');
+    if (el) el.remove();
+    return;
+  }
+  const splash = document.getElementById('splash-screen');
+  if (!splash) return;
+  sessionStorage.setItem(splashKey, '1');
+  setTimeout(() => {
+    splash.classList.add('splash-fade-out');
+    setTimeout(() => splash.remove(), 600);
+  }, 1500);
+})();
 
 // ============ 模块：首页 ============
 registerRoute('home', async (root) => {
@@ -2232,6 +2282,1505 @@ function showFatalError(title, detail) {
   }
   panel.innerHTML = '<h2 style="color:#ff6b6b;margin-bottom:12px;">❌ ' + title + '</h2><div>' + String(detail).slice(0, 3000) + '</div><p style="margin-top:16px;color:#aaa;">请截图发我</p>';
 }
+
+// ============ 可爱风格日程中心模块 ============
+const CATEGORY_MAP = {
+  work: { label: '工作', cls: 'cat-work', icon: '💼', color: '#42A5F5' },
+  life: { label: '生活', cls: 'cat-life', icon: '🏠', color: '#EC407A' },
+  study: { label: '学习', cls: 'cat-study', icon: '📚', color: '#66BB6A' },
+  health: { label: '健康', cls: 'cat-health', icon: '💪', color: '#FFA726' },
+  other: { label: '其他', cls: 'cat-other', icon: '✨', color: '#AB47BC' }
+};
+
+const CUSTOM_CATEGORIES_KEY = 'custom_categories';
+
+function getCustomCategories() {
+  try {
+    return JSON.parse(localStorage.getItem(CUSTOM_CATEGORIES_KEY) || '[]');
+  } catch { return []; }
+}
+
+function saveCustomCategories(list) {
+  localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(list));
+}
+
+function getAllCategories() {
+  const defaults = [
+    { value: 'all', label: '全部分类', icon: '📋', color: '#9E9E9E', isAll: true },
+    { value: 'none', label: '无分类', icon: '🚫', color: '#BDBDBD', isNone: true },
+    ...Object.entries(CATEGORY_MAP).map(([key, info]) => ({
+      value: key, label: info.label, icon: info.icon, color: info.color, isDefault: true
+    }))
+  ];
+  const customs = getCustomCategories().map(c => ({
+    value: c.id, label: c.name, icon: c.icon, color: c.color, isCustom: true
+  }));
+  return [...defaults, ...customs];
+}
+
+// 日程中心状态
+const ScheduleState = {
+  currentDate: new Date(),
+  selectedDate: new Date(),
+  currentTab: 'schedule',
+  currentFilter: 'all',
+  statsMainTab: 'plan',
+  statsSubTab: 'week',
+  statsRange: 'week',
+  statsFilter: 'priority',
+  focusMode: 'timer',
+  focusMinutes: 25,
+  focusRemaining: 0,
+  focusElapsed: 0,
+  focusPlaying: false,
+  focusTimer: null,
+  focusTotal: 0
+};
+
+// 工具：格式化日期为 YYYY-MM-DD
+function fmtDate2(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// 生成农历/节气简化显示（用节日替代）
+function getLunarDay(d) {
+  const key = `${d.getMonth()+1}-${d.getDate()}`;
+  const festivals = {
+    '1-1': '元旦', '2-14': '情人节', '3-8': '妇女节', '3-12': '植树节',
+    '4-1': '愚人节', '5-1': '劳动节', '5-4': '青年节', '6-1': '儿童节',
+    '7-1': '建党节', '8-1': '建军节', '9-10': '教师节', '10-1': '国庆',
+    '12-25': '圣诞', '2-16': '除夕', '2-17': '春节'
+  };
+  return festivals[key] || '';
+}
+
+// 获取指定日期的任务
+async function getTasksForDate(dateStr) {
+  const todos = await DBgetAll('todos');
+  return todos.filter(t => {
+    if (!t.deadline) return false;
+    return t.deadline.startsWith(dateStr);
+  });
+}
+
+// 获取日期范围内的任务
+async function getTasksInRange(startDate, endDate) {
+  const todos = await DBgetAll('todos');
+  return todos.filter(t => {
+    if (!t.deadline) return false;
+    const dl = t.deadline.slice(0, 10);
+    return dl >= startDate && dl <= endDate;
+  });
+}
+
+// 获取日期范围内的专注数据
+async function getFocusData(startDate, endDate) {
+  const records = await DBgetAll('focus');
+  const inRange = records.filter(r => r.date >= startDate && r.date <= endDate);
+  const today = fmtDate2(new Date());
+  const todayRecords = records.filter(r => r.date === today);
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = fmtDate2(yesterday);
+  const yesterdayRecords = records.filter(r => r.date === yesterdayStr);
+
+  const totalPomodoros = inRange.filter(r => r.type === 'pomodoro' && r.completed).length;
+  const todayPomodoros = todayRecords.filter(r => r.type === 'pomodoro' && r.completed).length;
+  const yesterdayPomodoros = yesterdayRecords.filter(r => r.type === 'pomodoro' && r.completed).length;
+
+  const totalFocusMs = inRange.reduce((sum, r) => sum + (r.duration || 0), 0);
+  const todayFocusMs = todayRecords.reduce((sum, r) => sum + (r.duration || 0), 0);
+  const yesterdayFocusMs = yesterdayRecords.reduce((sum, r) => sum + (r.duration || 0), 0);
+
+  const catStats = {};
+  inRange.forEach(r => {
+    const cat = r.category || 'uncategorized';
+    if (!catStats[cat]) catStats[cat] = { count: 0, duration: 0 };
+    catStats[cat].count++;
+    catStats[cat].duration += (r.duration || 0);
+  });
+
+  return {
+    totalPomodoros,
+    todayPomodoros,
+    yesterdayPomodoros,
+    totalFocusMs,
+    todayFocusMs,
+    yesterdayFocusMs,
+    catStats,
+    totalRecords: inRange.length
+  };
+}
+
+// 渲染月历
+function renderCuteCalendar(year, month, selectedDate, onSelect) {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startWeekday = firstDay.getDay();
+  const daysInMonth = lastDay.getDate();
+  const today = new Date();
+  const todayStr = fmtDate2(today);
+  const selectedStr = fmtDate2(selectedDate);
+
+  const container = U.el('div', { class: 'cute-calendar' });
+  
+  // 头部
+  const header = U.el('div', { class: 'cute-calendar-header' }, [
+    U.el('div', { class: 'cute-calendar-nav' }, [
+      U.el('button', { onclick: () => { ScheduleState.currentDate = new Date(year, month - 1, 1); renderCalendar(); } }, '‹'),
+      U.el('button', { onclick: () => { ScheduleState.currentDate = new Date(year, month + 1, 1); renderCalendar(); } }, '›')
+    ]),
+    U.el('div', { class: 'cute-calendar-title' }, `${year}年${month + 1}月`),
+    U.el('div', { style: 'width:64px' }) // 占位对齐
+  ]);
+  container.appendChild(header);
+
+  // 星期表头
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+  const weekHeader = U.el('div', { class: 'cute-calendar-weekdays' });
+  weekdays.forEach(w => weekHeader.appendChild(U.el('div', {}, w)));
+  container.appendChild(weekHeader);
+
+  // 日期网格
+  const daysGrid = U.el('div', { class: 'cute-calendar-days' });
+  
+  // 上月填充
+  const prevMonthLastDay = new Date(year, month, 0).getDate();
+  for (let i = startWeekday - 1; i >= 0; i--) {
+    const dayEl = U.el('div', { class: 'cute-calendar-day other-month' }, [
+      U.el('div', {}, String(prevMonthLastDay - i))
+    ]);
+    daysGrid.appendChild(dayEl);
+  }
+
+  // 当月日期
+  const todayTasks = []; // 异步填充
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateObj = new Date(year, month, d);
+    const dateStr = fmtDate2(dateObj);
+    const isToday = dateStr === todayStr;
+    const isSelected = dateStr === selectedStr;
+    const lunar = getLunarDay(dateObj);
+    
+    const dayEl = U.el('div', {
+      class: `cute-calendar-day ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}`,
+      onclick: () => { onSelect(dateObj); }
+    }, [
+      U.el('div', {}, String(d))
+    ]);
+    if (lunar) {
+      dayEl.appendChild(U.el('div', { class: 'cute-calendar-day-lunar' }, lunar));
+    }
+    daysGrid.appendChild(dayEl);
+
+    // 检查是否有任务
+    getTasksForDate(dateStr).then(tasks => {
+      if (tasks.length > 0) {
+        dayEl.classList.add('has-tasks');
+      }
+    });
+  }
+
+  // 下月填充
+  const totalCells = startWeekday + daysInMonth;
+  const remaining = (7 - (totalCells % 7)) % 7;
+  for (let i = 1; i <= remaining; i++) {
+    const dayEl = U.el('div', { class: 'cute-calendar-day other-month' }, [
+      U.el('div', {}, String(i))
+    ]);
+    daysGrid.appendChild(dayEl);
+  }
+
+  container.appendChild(daysGrid);
+  return container;
+}
+
+// 日程页面渲染函数（重新渲染日程中心，避免无限递归）
+function renderCalendar() {
+  const hash = location.hash.replace(/^#\//, '') || 'home';
+  const route = hash.split('/')[0];
+  if (route !== 'schedule') return;
+  const info = ROUTES[route];
+  if (!info) return;
+  const content = document.getElementById('content');
+  if (!content) return;
+  // 重新调用日程页面的注册处理器
+  info.handler(content).catch(e => {
+    console.error(e); Toast.err('渲染出错：' + e.message);
+  });
+}
+
+// 注册：日程页面
+registerRoute('schedule', async (root) => {
+  // 绑定悬浮按钮事件
+  const fabAdd = document.getElementById('fab-add');
+  if (fabAdd) fabAdd.onclick = () => openAddTaskModal();
+  
+  root.innerHTML = '';
+  const app = U.el('div', { class: 'schedule-app' });
+  
+  // 顶部栏
+  const topBar = U.el('div', { class: 'schedule-top-bar' }, [
+    U.el('div', { class: 'schedule-menu-btn', onclick: () => { location.hash = '#/home'; } }, '☰'),
+    U.el('div', { class: 'schedule-avatar', onclick: () => { location.hash = '#/profile'; } }, '🐰')
+  ]);
+  app.appendChild(topBar);
+
+  // 标签切换
+  const tabBar = U.el('div', { class: 'schedule-tabs' });
+  const tabSchedule = U.el('div', { class: 'schedule-tab active', onclick: () => { ScheduleState.currentTab = 'schedule'; updateTabs(); render(); } }, '日程');
+  const tabTodo = U.el('div', { class: 'schedule-tab', onclick: () => { ScheduleState.currentTab = 'todo'; updateTabs(); render(); } }, '待办');
+  tabBar.appendChild(tabSchedule);
+  tabBar.appendChild(tabTodo);
+  app.appendChild(tabBar);
+
+  function updateTabs() {
+    tabSchedule.classList.toggle('active', ScheduleState.currentTab === 'schedule');
+    tabTodo.classList.toggle('active', ScheduleState.currentTab === 'todo');
+  }
+
+  // 日期标题
+  const dateStr = `${ScheduleState.selectedDate.getFullYear()}.${String(ScheduleState.selectedDate.getMonth()+1).padStart(2,'0')}.${String(ScheduleState.selectedDate.getDate()).padStart(2,'0')}`;
+  const header = U.el('div', { class: 'schedule-header' }, [
+    U.el('div', { class: 'schedule-date-title' }, dateStr),
+    U.el('div', { class: 'schedule-filter-btn', onclick: () => openFilterModal() }, '🏷️ 全部分类 ▸')
+  ]);
+  app.appendChild(header);
+
+  // 月历
+  const calendar = renderCuteCalendar(
+    ScheduleState.currentDate.getFullYear(),
+    ScheduleState.currentDate.getMonth(),
+    ScheduleState.selectedDate,
+    (date) => { ScheduleState.selectedDate = date; render(); }
+  );
+  app.appendChild(calendar);
+
+  // 内容区
+  const content = U.el('div', { class: 'schedule-content' });
+  app.appendChild(content);
+
+  async function render() {
+    content.innerHTML = '';
+    const selDateStr = fmtDate2(ScheduleState.selectedDate);
+    let tasks = await getTasksForDate(selDateStr);
+    
+    // 过滤
+    if (ScheduleState.currentFilter === 'none') {
+      tasks = tasks.filter(t => !t.category || t.category === '');
+    } else if (ScheduleState.currentFilter !== 'all') {
+      tasks = tasks.filter(t => t.category === ScheduleState.currentFilter);
+    }
+
+    if (ScheduleState.currentTab === 'todo') {
+      tasks = tasks.filter(t => !t.done);
+    }
+
+    if (tasks.length === 0) {
+      // 空状态
+      const empty = U.el('div', { class: 'cute-empty' }, [
+        U.el('div', { class: 'cute-empty-illustration' }, [
+          U.el('div', { class: 'cute-empty-bunny' }, '🐰'),
+          U.el('div', { class: 'cute-empty-bike' }, '🚲'),
+          U.el('div', { style: 'font-size:30px;position:absolute;bottom:10px;right:20px;' }, '🎵')
+        ]),
+        U.el('div', { class: 'cute-empty-text' }, '今天没有计划哦~'),
+        U.el('div', { class: 'cute-empty-hint' }, '点击「＋」创建计划')
+      ]);
+      content.appendChild(empty);
+    } else {
+      // 时段分组
+      const morning = tasks.filter(t => {
+        if (!t.deadline || !t.deadline.includes('T')) return true;
+        const h = parseInt(t.deadline.split('T')[1]?.split(':')[0] || '0');
+        return h < 12;
+      });
+      const afternoon = tasks.filter(t => {
+        if (!t.deadline || !t.deadline.includes('T')) return false;
+        const h = parseInt(t.deadline.split('T')[1]?.split(':')[0] || '0');
+        return h >= 12 && h < 18;
+      });
+      const evening = tasks.filter(t => {
+        if (!t.deadline || !t.deadline.includes('T')) return false;
+        const h = parseInt(t.deadline.split('T')[1]?.split(':')[0] || '0');
+        return h >= 18;
+      });
+
+      const sections = [];
+      if (ScheduleState.currentTab === 'schedule') {
+        if (morning.length > 0) sections.push({ title: '🌅 上午', tasks: morning });
+        if (afternoon.length > 0) sections.push({ title: '☀️ 下午', tasks: afternoon });
+        if (evening.length > 0) sections.push({ title: '🌙 晚上', tasks: evening });
+      }
+      const unscheduled = tasks.filter(t => !t.deadline || !t.deadline.includes('T'));
+      if (unscheduled.length > 0) sections.push({ title: '📝 未定时', tasks: unscheduled });
+
+      sections.forEach(sec => {
+        const secTitle = U.el('div', { class: 'schedule-section-title' }, [
+          U.el('span', {}, sec.title),
+          U.el('span', { class: 'schedule-section-count' }, `${sec.tasks.length} 项`)
+        ]);
+        content.appendChild(secTitle);
+
+        const list = U.el('div', { class: 'cute-task-list' });
+        sec.tasks.forEach(task => {
+          const card = createTaskCard(task);
+          list.appendChild(card);
+        });
+        content.appendChild(list);
+      });
+    }
+  }
+
+  function createTaskCard(task) {
+    const priority = task.priority || 'mid';
+    const catInfo = CATEGORY_MAP[task.category];
+    const catColor = catInfo ? catInfo.cls : 'cat-other';
+    const catLabel = catInfo ? catInfo.label : (() => {
+      const custom = getCustomCategories().find(c => c.id === task.category);
+      return custom ? custom.name : '未分类';
+    })();
+    const catIcon = catInfo ? catInfo.icon : (() => {
+      const custom = getCustomCategories().find(c => c.id === task.category);
+      return custom ? custom.icon : '📋';
+    })();
+    const deadlineText = task.deadline ? (task.deadline.includes('T') ? task.deadline.split('T')[1].slice(0,5) : '') : '';
+    
+    const card = U.el('div', {
+      class: `cute-task-card priority-${priority} ${task.done ? 'done' : ''}`,
+      onclick: () => openAddTaskModal(task)
+    }, [
+      U.el('div', {
+        class: `cute-task-check ${task.done ? 'checked' : ''}`,
+        onclick: (e) => { e.stopPropagation(); task.done = !task.done; DBput('todos', task).then(render); }
+      }),
+      U.el('div', { class: 'cute-task-body' }, [
+        U.el('div', { class: 'cute-task-title' }, task.title || '未命名任务'),
+        U.el('div', { class: 'cute-task-meta' }, [
+          U.el('span', { class: `category-tag ${catColor}` }, `${catIcon} ${catLabel}`),
+          deadlineText ? U.el('span', { class: 'cute-task-deadline' }, `⏰ ${deadlineText}`) : null,
+          task.priority === 'high' ? U.el('span', { class: 'category-tag cat-work' }, '🔴 高优') : null
+        ].filter(Boolean))
+      ]),
+      U.el('button', {
+        class: 'cute-task-delete',
+        onclick: (e) => {
+          e.stopPropagation();
+          Modal.confirm('删除任务', '将移入回收站', () => DBdelete('todos', task.id).then(render), '删除', '取消', true);
+        }
+      }, '🗑️')
+    ]);
+    return card;
+  }
+
+  function openFilterModal() {
+  const backdrop = U.el('div', { class: 'modal-sheet-backdrop' });
+  const sheet = U.el('div', { class: 'modal-sheet' });
+  backdrop.appendChild(sheet);
+  document.body.appendChild(backdrop);
+
+  requestAnimationFrame(() => {
+    backdrop.classList.add('active');
+    sheet.classList.add('active');
+  });
+
+  function close() {
+    backdrop.classList.remove('active');
+    sheet.classList.remove('active');
+    setTimeout(() => backdrop.remove(), 350);
+  }
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  function renderCategoryList(onSelect) {
+    sheet.innerHTML = '';
+    sheet.appendChild(U.el('div', { class: 'modal-sheet-handle' }));
+    sheet.appendChild(U.el('div', { class: 'modal-sheet-header' }, [
+      U.el('div', { class: 'modal-sheet-title' }, '选择分类'),
+      U.el('button', { class: 'modal-sheet-close', onclick: close }, '✕')
+    ]));
+
+    const body = U.el('div', { class: 'modal-sheet-body' });
+    const categories = getAllCategories();
+
+    categories.forEach(cat => {
+      const isActive = ScheduleState.currentFilter === cat.value;
+      const item = U.el('div', {
+        class: 'category-item' + (isActive ? ' active' : ''),
+        onclick: () => { onSelect(cat.value); close(); }
+      }, [
+        U.el('div', { class: 'category-item-icon', style: `background: ${cat.color}20;` }, cat.icon),
+        U.el('div', { class: 'category-item-info' }, [
+          U.el('div', { class: 'category-item-name' }, cat.label)
+        ]),
+        U.el('div', { class: 'category-item-check' })
+      ]);
+      body.appendChild(item);
+    });
+
+    sheet.appendChild(body);
+
+    const footer = U.el('div', { class: 'modal-sheet-footer' });
+    footer.appendChild(U.el('button', {
+      class: 'category-manage-btn ghost',
+      onclick: () => { close(); openCategoryManager(); }
+    }, '📁 分类管理'));
+    footer.appendChild(U.el('button', {
+      class: 'category-manage-btn primary',
+      onclick: () => { close(); openCreateCategory(); }
+    }, '＋ 新建分类'));
+    sheet.appendChild(footer);
+  }
+
+  renderCategoryList((value) => {
+    ScheduleState.currentFilter = value;
+    render();
+  });
+}
+
+function openCategoryManager() {
+  const backdrop = U.el('div', { class: 'modal-sheet-backdrop' });
+  const sheet = U.el('div', { class: 'modal-sheet', style: 'max-height: 85vh;' });
+  backdrop.appendChild(sheet);
+  document.body.appendChild(backdrop);
+
+  requestAnimationFrame(() => {
+    backdrop.classList.add('active');
+    sheet.classList.add('active');
+  });
+
+  function close() {
+    backdrop.classList.remove('active');
+    sheet.classList.remove('active');
+    setTimeout(() => backdrop.remove(), 350);
+  }
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  function render() {
+    sheet.innerHTML = '';
+    sheet.appendChild(U.el('div', { class: 'modal-sheet-handle' }));
+    sheet.appendChild(U.el('div', { class: 'modal-sheet-header' }, [
+      U.el('div', { class: 'modal-sheet-title' }, '分类管理'),
+      U.el('button', { class: 'modal-sheet-close', onclick: close }, '✕')
+    ]));
+
+    const body = U.el('div', { class: 'modal-sheet-body' });
+    const customs = getCustomCategories();
+
+    const title = U.el('div', { class: 'category-manage-title' }, '自定义分类');
+    body.appendChild(title);
+
+    if (customs.length === 0) {
+      body.appendChild(U.el('div', { class: 'category-empty' }, [
+        U.el('div', { class: 'category-empty-icon' }, '📝'),
+        U.el('div', { class: 'category-empty-text' }, '还没有自定义分类，点击下方按钮添加')
+      ]));
+    } else {
+      const list = U.el('div', { class: 'category-list' });
+      customs.forEach(cat => {
+        const item = U.el('div', { class: 'category-item' }, [
+          U.el('div', { class: 'category-item-icon', style: `background: ${cat.color}20;` }, cat.icon),
+          U.el('div', { class: 'category-item-info' }, [
+            U.el('div', { class: 'category-item-name' }, cat.name)
+          ]),
+          U.el('div', { class: 'category-item-actions' }, [
+            U.el('button', {
+              class: 'category-item-action',
+              title: '重命名',
+              onclick: () => { close(); openCreateCategory(cat); }
+            }, '✏️'),
+            U.el('button', {
+              class: 'category-item-action',
+              title: '删除',
+              onclick: () => {
+                Modal.confirm('删除分类', `确定删除「${cat.name}」？相关任务将变为未分类。`, () => {
+                  const list = getCustomCategories().filter(c => c.id !== cat.id);
+                  saveCustomCategories(list);
+                  Toast.ok('已删除');
+                  render();
+                }, '删除', '取消', true);
+              }
+            }, '🗑️')
+          ])
+        ]);
+        list.appendChild(item);
+      });
+      body.appendChild(list);
+    }
+
+    sheet.appendChild(body);
+
+    const footer = U.el('div', { class: 'modal-sheet-footer' });
+    footer.appendChild(U.el('button', {
+      class: 'category-manage-btn primary',
+      onclick: () => { close(); openCreateCategory(); }
+    }, '＋ 新建分类'));
+    sheet.appendChild(footer);
+  }
+
+  render();
+}
+
+const CATEGORY_ICONS = ['💼','🏠','📚','💪','✨','🎯','🎨','🎮','🍳','🛒','🚗','✈️','🏋️','🧘','📖','🎵','🖌️','🧹','📧','☎️','💡','🔧','🌱','☕','🍅','📝','🎁','💊','🐾','🌟'];
+const CATEGORY_COLORS = ['#42A5F5','#EC407A','#66BB6A','#FFA726','#AB47BC','#EF5350','#26C6DA','#8D6E63','#7E57C2','#FF7043','#26A69A','#5C6BC0','#66BB6A','#FFCA28','#F06292'];
+
+function openCreateCategory(existing) {
+  const isEdit = !!existing;
+  const data = existing || { id: null, name: '', icon: '✨', color: '#AB47BC' };
+
+  const backdrop = U.el('div', { class: 'modal-sheet-backdrop' });
+  const sheet = U.el('div', { class: 'modal-sheet' });
+  backdrop.appendChild(sheet);
+  document.body.appendChild(backdrop);
+
+  requestAnimationFrame(() => {
+    backdrop.classList.add('active');
+    sheet.classList.add('active');
+  });
+
+  function close() {
+    backdrop.classList.remove('active');
+    sheet.classList.remove('active');
+    setTimeout(() => backdrop.remove(), 350);
+  }
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  sheet.appendChild(U.el('div', { class: 'modal-sheet-handle' }));
+  sheet.appendChild(U.el('div', { class: 'modal-sheet-header' }, [
+    U.el('div', { class: 'modal-sheet-title' }, isEdit ? '编辑分类' : '新建分类'),
+    U.el('button', { class: 'modal-sheet-close', onclick: close }, '✕')
+  ]));
+
+  const body = U.el('div', { class: 'modal-sheet-body' });
+
+  const nameInput = U.el('input', {
+    class: 'category-name-input',
+    placeholder: '分类名称（限15字）',
+    maxlength: '15',
+    value: data.name
+  });
+  body.appendChild(U.el('div', { class: 'form-field' }, [
+    U.el('label', { class: 'form-label', text: '分类名称' }),
+    nameInput
+  ]));
+
+  const iconLabel = U.el('label', { class: 'form-label', text: '选择图标' });
+  body.appendChild(iconLabel);
+  const iconGrid = U.el('div', { class: 'category-icon-grid' });
+  CATEGORY_ICONS.forEach(ic => {
+    const cell = U.el('div', {
+      class: 'category-icon-cell' + (ic === data.icon ? ' active' : ''),
+      text: ic,
+      onclick: () => {
+        data.icon = ic;
+        iconGrid.querySelectorAll('.category-icon-cell').forEach(x => x.classList.remove('active'));
+        cell.classList.add('active');
+      }
+    });
+    iconGrid.appendChild(cell);
+  });
+  body.appendChild(iconGrid);
+
+  const colorLabel = U.el('label', { class: 'form-label', text: '选择颜色' });
+  body.appendChild(colorLabel);
+  const colorPicker = U.el('div', { class: 'color-picker' });
+  CATEGORY_COLORS.forEach(col => {
+    const swatch = U.el('div', {
+      class: 'color-swatch' + (col === data.color ? ' active' : ''),
+      style: `background: ${col};`,
+      onclick: () => {
+        data.color = col;
+        colorPicker.querySelectorAll('.color-swatch').forEach(x => x.classList.remove('active'));
+        swatch.classList.add('active');
+      }
+    });
+    colorPicker.appendChild(swatch);
+  });
+  body.appendChild(colorPicker);
+
+  sheet.appendChild(body);
+
+  const footer = U.el('div', { class: 'modal-sheet-footer' });
+  footer.appendChild(U.el('button', {
+    class: 'category-manage-btn ghost',
+    onclick: close
+  }, '取消'));
+  footer.appendChild(U.el('button', {
+    class: 'category-manage-btn primary',
+    onclick: () => {
+      const name = nameInput.value.trim();
+      if (!name) { Toast.warn('请输入分类名称'); return; }
+      if (name.length > 15) { Toast.warn('分类名不超过15字'); return; }
+      const list = getCustomCategories();
+      if (isEdit) {
+        const idx = list.findIndex(c => c.id === existing.id);
+        if (idx >= 0) list[idx] = { ...list[idx], name, icon: data.icon, color: data.color };
+        saveCustomCategories(list);
+        Toast.ok('已保存');
+      } else {
+        list.push({ id: U.uid(), name, icon: data.icon, color: data.color });
+        saveCustomCategories(list);
+        Toast.ok('已创建');
+      }
+      close();
+    }
+  }, isEdit ? '保存' : '创建'));
+  sheet.appendChild(footer);
+}
+
+  await render();
+  root.appendChild(app);
+}, '日程中心');
+
+// 打开添加/编辑任务弹窗
+function openAddTaskModal(existing) {
+  const isEdit = !!existing;
+  const data = existing || {
+    title: '', desc: '', priority: 'mid', category: 'work',
+    deadline: fmtDate2(ScheduleState.selectedDate) + 'T09:00',
+    done: false
+  };
+
+  const titleInput = U.el('input', { class: 'form-input', placeholder: '任务标题...', value: data.title });
+  const prioritySelect = U.el('select', { class: 'form-input' }, [
+    U.el('option', { value: 'high', text: '🔴 高优先级', selected: data.priority === 'high' }),
+    U.el('option', { value: 'mid', text: '🟡 中优先级', selected: data.priority === 'mid' }),
+    U.el('option', { value: 'low', text: '🟢 低优先级', selected: data.priority === 'low' })
+  ]);
+  const categoryOptions = [
+    ...Object.entries(CATEGORY_MAP).map(([key, info]) => ({ value: key, text: `${info.icon} ${info.label}` })),
+    ...getCustomCategories().map(c => ({ value: c.id, text: `${c.icon} ${c.name}` }))
+  ];
+  const categorySelect = U.el('select', { class: 'form-input' },
+    categoryOptions.map(o => U.el('option', { value: o.value, text: o.text, selected: data.category === o.value }))
+  );
+  const deadlineInput = U.el('input', { class: 'form-input', type: 'datetime-local', value: data.deadline });
+  const descInput = U.el('textarea', { class: 'form-input', rows: '3', placeholder: '备注...' }, data.desc || '');
+
+  const body = U.el('div', { class: 'form' }, [
+    U.el('div', { class: 'form-field' }, [U.el('label', { class: 'form-label', text: '任务标题 *' }), titleInput]),
+    U.el('div', { class: 'form-field' }, [U.el('label', { class: 'form-label', text: '优先级' }), prioritySelect]),
+    U.el('div', { class: 'form-field' }, [U.el('label', { class: 'form-label', text: '分类' }), categorySelect]),
+    U.el('div', { class: 'form-field' }, [U.el('label', { class: 'form-label', text: '截止时间' }), deadlineInput]),
+    U.el('div', { class: 'form-field' }, [U.el('label', { class: 'form-label', text: '备注' }), descInput])
+  ]);
+
+  const footer = U.el('div', { class: 'modal-footer-buttons' }, [
+    U.el('button', { class: 'btn btn-ghost', text: '取消', onclick: () => Modal.close() }),
+    U.el('button', { class: 'btn btn-primary', text: isEdit ? '保存' : '添加', onclick: async () => {
+      const task = {
+        id: existing?.id,
+        title: titleInput.value.trim() || '未命名任务',
+        priority: prioritySelect.value,
+        category: categorySelect.value,
+        deadline: deadlineInput.value,
+        desc: descInput.value,
+        done: data.done || false
+      };
+      if (isEdit) await DBput('todos', task);
+      else await DBadd('todos', task);
+      Modal.close();
+      Toast.ok(isEdit ? '已保存' : '已添加');
+      const route = location.hash.replace(/^#\//, '').split('/')[0];
+      if (route === 'schedule' || route === 'calendar') navigate();
+    }})
+  ]);
+
+  Modal.open(isEdit ? '编辑任务' : '新建任务', body, footer);
+}
+
+// 注册：月视图页面
+registerRoute('calendar', async (root) => {
+  const fabAdd = document.getElementById('fab-add');
+  if (fabAdd) fabAdd.onclick = () => openAddTaskModal();
+
+  root.innerHTML = '';
+  const app = U.el('div', { class: 'schedule-app' });
+
+  const topBar = U.el('div', { class: 'schedule-top-bar' }, [
+    U.el('div', { class: 'schedule-menu-btn', onclick: () => { location.hash = '#/schedule'; } }, '‹'),
+    U.el('div', { class: 'schedule-avatar', onclick: () => { location.hash = '#/profile'; } }, '🐰')
+  ]);
+  app.appendChild(topBar);
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+
+  const viewHeader = U.el('div', { class: 'month-view-header' }, [
+    U.el('div', { class: 'month-view-title' }, `${year}年${month + 1}月`),
+    U.el('div', { class: 'month-view-nav' }, [
+      U.el('button', {
+        class: 'month-view-nav-btn',
+        onclick: () => {
+          const d = new Date(year, month - 1, 1);
+          ScheduleState.currentDate = d;
+          location.hash = '#/calendar';
+        }
+      }, '‹'),
+      U.el('button', {
+        class: 'month-view-nav-btn',
+        onclick: () => {
+          const d = new Date(year, month + 1, 1);
+          ScheduleState.currentDate = d;
+          location.hash = '#/calendar';
+        }
+      }, '›')
+    ])
+  ]);
+  app.appendChild(viewHeader);
+
+  const banner = U.el('div', { class: 'month-view-banner' }, [
+    U.el('div', { class: 'month-view-banner-icon' }, '🌙'),
+    U.el('div', { class: 'month-view-banner-text' }, [
+      U.el('h3', {}, '月视图'),
+      U.el('p', {}, '一目了然的月程全景')
+    ]),
+    U.el('button', { class: 'month-view-banner-btn', onclick: () => Toast.show('功能开发中', 'info') }, '✨ 开通会员')
+  ]);
+  app.appendChild(banner);
+
+  const firstDay = new Date(year, month, 1);
+  const startWeekday = (firstDay.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayStr = fmtDate2(now);
+  const selectedStr = fmtDate2(ScheduleState.selectedDate);
+
+  const grid = U.el('div', { class: 'month-grid' });
+
+  const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+  const weekHeader = U.el('div', { class: 'month-weekdays' });
+  weekdays.forEach((w, i) => {
+    const cls = (i === 5 || i === 6) ? 'weekend' : '';
+    weekHeader.appendChild(U.el('div', { class: cls }, w));
+  });
+  grid.appendChild(weekHeader);
+
+  const daysContainer = U.el('div', { class: 'month-days' });
+
+  for (let i = 0; i < startWeekday; i++) {
+    daysContainer.appendChild(U.el('div', { class: 'month-day', style: 'visibility:hidden;' }));
+  }
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateObj = new Date(year, month, d);
+    const dateStr = fmtDate2(dateObj);
+    const isToday = dateStr === todayStr;
+    const isSelected = dateStr === selectedStr;
+    const lunar = getLunarDay(dateObj);
+
+    const dayClasses = ['month-day'];
+    if (isToday) dayClasses.push('today');
+    if (isSelected) dayClasses.push('selected');
+
+    const dayChildren = [
+      U.el('div', { class: 'month-day-header' }, [
+        U.el('div', { class: 'month-day-num' }, String(d))
+      ])
+    ];
+
+    if (lunar) {
+      dayChildren.push(U.el('div', { class: 'month-day-lunar' }, lunar));
+    }
+
+    dayChildren.push(U.el('div', { class: 'month-day-task-dots' }));
+
+    dayChildren.push(U.el('div', { class: 'month-day-illustration' }, isToday ? '🐰' : ''));
+
+    const dayEl = U.el('div', {
+      class: dayClasses.join(' '),
+      onclick: () => {
+        ScheduleState.selectedDate = dateObj;
+        location.hash = '#/schedule';
+      }
+    }, dayChildren);
+
+    daysContainer.appendChild(dayEl);
+
+    getTasksForDate(dateStr).then(tasks => {
+      const dotsContainer = dayEl.querySelector('.month-day-task-dots');
+      if (tasks.length > 0) {
+        const dotCount = Math.min(tasks.length, 3);
+        for (let i = 0; i < dotCount; i++) {
+          dotsContainer.appendChild(U.el('span', { class: 'month-day-task-dot' }));
+        }
+      }
+    });
+  }
+
+  grid.appendChild(daysContainer);
+  app.appendChild(grid);
+  root.appendChild(app);
+}, '月视图');
+
+// 注册：专注页面
+registerRoute('focus', async (root) => {
+  root.innerHTML = '';
+  const app = U.el('div', { class: 'schedule-app' });
+
+  const topBar = U.el('div', { class: 'schedule-top-bar' }, [
+    U.el('div', { class: 'schedule-menu-btn', onclick: () => { location.hash = '#/schedule'; } }, '‹'),
+    U.el('div', { class: 'schedule-avatar' }, '⏱️')
+  ]);
+  app.appendChild(topBar);
+
+  const focusPage = U.el('div', { class: 'focus-page', id: 'focus-page' });
+
+  // ---- 模式切换 ----
+  const modes = [
+    { key: 'timer', label: '正计时' },
+    { key: 'pomodoro', label: '番茄钟' },
+    { key: 'countdown', label: '倒计时' }
+  ];
+  const tabsBar = U.el('div', { class: 'focus-mode-tabs' });
+  modes.forEach(m => {
+    tabsBar.appendChild(U.el('button', {
+      class: `focus-mode-tab ${ScheduleState.focusMode === m.key ? 'active' : ''}`,
+      onclick: () => switchMode(m.key)
+    }, m.label));
+  });
+  focusPage.appendChild(tabsBar);
+
+  // ---- 关联计划链接 ----
+  const planLink = U.el('a', {
+    class: 'focus-link-plan',
+    onclick: () => Toast.show('关联计划功能开发中', 'info')
+  }, '📎 关联计划');
+  focusPage.appendChild(planLink);
+
+  // ---- SVG 圆环计时器 ----
+  const RADIUS = 130;
+  const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', '0 0 280 280');
+  svg.setAttribute('width', '280');
+  svg.setAttribute('height', '280');
+
+  const bgCircle = document.createElementNS(svgNS, 'circle');
+  bgCircle.setAttribute('cx', '140');
+  bgCircle.setAttribute('cy', '140');
+  bgCircle.setAttribute('r', String(RADIUS));
+  bgCircle.setAttribute('class', 'focus-ring-bg');
+  bgCircle.setAttribute('stroke-width', '10');
+
+  const progressCircle = document.createElementNS(svgNS, 'circle');
+  progressCircle.setAttribute('cx', '140');
+  progressCircle.setAttribute('cy', '140');
+  progressCircle.setAttribute('r', String(RADIUS));
+  progressCircle.setAttribute('class', 'focus-ring-progress');
+  progressCircle.setAttribute('stroke-width', '10');
+  progressCircle.setAttribute('stroke-linecap', 'round');
+  progressCircle.setAttribute('stroke-dasharray', String(CIRCUMFERENCE));
+  progressCircle.setAttribute('stroke-dashoffset', '0');
+
+  svg.appendChild(bgCircle);
+  svg.appendChild(progressCircle);
+
+  const ringCenter = U.el('div', { class: 'focus-ring-center' }, [
+    U.el('div', { class: 'time-value', id: 'focus-time-value' }, '00:00'),
+    U.el('div', { class: 'time-unit' }, '分钟')
+  ]);
+
+  const ring = U.el('div', { class: 'focus-ring' }, [svg, ringCenter]);
+  focusPage.appendChild(ring);
+
+  // ---- 开始/暂停按钮 ----
+  const startBtn = U.el('button', {
+    class: 'focus-start-btn',
+    onclick: handleStartBtn
+  }, '开始专注');
+  focusPage.appendChild(startBtn);
+
+  // ---- 底部插画 ----
+  const illustration = U.el('div', { class: 'focus-illustration' }, [
+    U.el('div', { class: 'bunny' }, '🐰 👧'),
+    U.el('div', { class: 'scene' }, '一起专注，共同进步 ✨')
+  ]);
+  focusPage.appendChild(illustration);
+
+  // ---- 快速操作 ----
+  const quickActions = U.el('div', { class: 'focus-quick-actions' });
+  const pomodoroBtn = U.el('button', {
+    class: 'focus-quick-btn',
+    title: '番茄钟 (25分钟)',
+    onclick: () => switchMode('pomodoro')
+  }, '🍅');
+  const countdownBtn = U.el('button', {
+    class: 'focus-quick-btn',
+    title: '自定义倒计时',
+    onclick: () => switchMode('countdown')
+  }, '⏱️');
+  const settingsBtn = U.el('button', {
+    class: 'focus-quick-btn',
+    title: '设置',
+    onclick: () => Toast.show('设置功能开发中', 'info')
+  }, '⚙️');
+  quickActions.appendChild(pomodoroBtn);
+  quickActions.appendChild(countdownBtn);
+  quickActions.appendChild(settingsBtn);
+  focusPage.appendChild(quickActions);
+
+  app.appendChild(focusPage);
+  root.appendChild(app);
+
+  // ==================== 逻辑函数 ====================
+
+  let focusSessionStart = null;
+  let focusAccumulatedMs = 0;
+
+  function saveFocusRecord(completed) {
+    const durationMs = focusAccumulatedMs + (focusSessionStart ? (Date.now() - focusSessionStart) : 0);
+    if (durationMs < 5000) return;
+    const record = {
+      type: ScheduleState.focusMode,
+      duration: durationMs,
+      completed: !!completed,
+      date: fmtDate2(new Date()),
+      category: ScheduleState.currentFilter !== 'all' ? ScheduleState.currentFilter : '',
+      createdAt: U.now()
+    };
+    DBadd('focus', record).catch(() => {});
+    focusSessionStart = null;
+    focusAccumulatedMs = 0;
+  }
+
+  function formatTime(seconds) {
+    const abs = Math.abs(seconds);
+    const m = Math.floor(abs / 60);
+    const s = abs % 60;
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function updateDisplay() {
+    const el = document.getElementById('focus-time-value');
+    if (!el) return;
+    let text;
+    if (ScheduleState.focusMode === 'timer') {
+      text = formatTime(ScheduleState.focusElapsed || 0);
+    } else {
+      text = formatTime(ScheduleState.focusRemaining);
+    }
+    el.textContent = text;
+    updateProgressRing();
+  }
+
+  function updateProgressRing() {
+    if (ScheduleState.focusMode === 'timer') {
+      progressCircle.setAttribute('stroke-dashoffset', '0');
+      return;
+    }
+    const total = ScheduleState.focusTotal || ScheduleState.focusMinutes * 60;
+    const remaining = ScheduleState.focusRemaining;
+    const ratio = total > 0 ? (total - remaining) / total : 0;
+    const offset = CIRCUMFERENCE * (1 - ratio);
+    progressCircle.setAttribute('stroke-dashoffset', String(offset));
+  }
+
+  function updateTabs() {
+    tabsBar.querySelectorAll('.focus-mode-tab').forEach((tab, i) => {
+      tab.classList.toggle('active', modes[i].key === ScheduleState.focusMode);
+    });
+  }
+
+  function updateStartBtn() {
+    let text;
+    if (ScheduleState.focusPlaying) {
+      text = '暂停';
+    } else if (ScheduleState.focusMode === 'timer') {
+      text = ScheduleState.focusElapsed > 0 ? '继续' : '开始专注';
+    } else {
+      text = ScheduleState.focusRemaining > 0 && ScheduleState.focusRemaining < ScheduleState.focusTotal ? '继续' : '开始专注';
+    }
+    startBtn.textContent = text;
+  }
+
+  function switchMode(mode) {
+    if (ScheduleState.focusTimer) {
+      clearInterval(ScheduleState.focusTimer);
+      ScheduleState.focusTimer = null;
+    }
+    ScheduleState.focusPlaying = false;
+    ScheduleState.focusMode = mode;
+
+    if (mode === 'timer') {
+      ScheduleState.focusElapsed = 0;
+      ScheduleState.focusRemaining = 0;
+      ScheduleState.focusTotal = 0;
+    } else if (mode === 'pomodoro') {
+      ScheduleState.focusMinutes = 25;
+      ScheduleState.focusTotal = 25 * 60;
+      ScheduleState.focusRemaining = 25 * 60;
+    } else if (mode === 'countdown') {
+      ScheduleState.focusMinutes = ScheduleState.focusMinutes || 25;
+      ScheduleState.focusTotal = ScheduleState.focusMinutes * 60;
+      ScheduleState.focusRemaining = ScheduleState.focusMinutes * 60;
+    }
+
+    updateTabs();
+    updateDisplay();
+    updateStartBtn();
+  }
+
+  function handleStartBtn() {
+    if (ScheduleState.focusPlaying) {
+      pauseTimer();
+    } else {
+      startTimer();
+    }
+  }
+
+  function startTimer() {
+    if (ScheduleState.focusPlaying) return;
+    ScheduleState.focusPlaying = true;
+    focusSessionStart = Date.now();
+
+    if (ScheduleState.focusMode === 'timer') {
+      if (ScheduleState.focusElapsed === undefined) ScheduleState.focusElapsed = 0;
+      ScheduleState.focusTimer = setInterval(() => {
+        ScheduleState.focusElapsed++;
+        updateDisplay();
+      }, 1000);
+    } else {
+      if (ScheduleState.focusRemaining <= 0) {
+        ScheduleState.focusRemaining = ScheduleState.focusMinutes * 60;
+        ScheduleState.focusTotal = ScheduleState.focusMinutes * 60;
+      }
+      ScheduleState.focusTimer = setInterval(() => {
+        ScheduleState.focusRemaining--;
+        updateDisplay();
+        if (ScheduleState.focusRemaining <= 0) {
+          saveFocusRecord(true);
+          stopTimer();
+          Toast.show('🎉 专注完成！休息一下吧~', 'ok');
+        }
+      }, 1000);
+    }
+
+    focusPage.classList.add('playing');
+    updateStartBtn();
+  }
+
+  function pauseTimer() {
+    if (ScheduleState.focusTimer) {
+      clearInterval(ScheduleState.focusTimer);
+      ScheduleState.focusTimer = null;
+    }
+    if (focusSessionStart) {
+      focusAccumulatedMs += Date.now() - focusSessionStart;
+      focusSessionStart = null;
+    }
+    ScheduleState.focusPlaying = false;
+    focusPage.classList.remove('playing');
+    updateStartBtn();
+  }
+
+  function stopTimer() {
+    if (ScheduleState.focusTimer) {
+      clearInterval(ScheduleState.focusTimer);
+      ScheduleState.focusTimer = null;
+    }
+    if (focusSessionStart || focusAccumulatedMs > 0) {
+      saveFocusRecord(false);
+    }
+    ScheduleState.focusPlaying = false;
+    focusPage.classList.remove('playing');
+    updateStartBtn();
+  }
+
+  // 初始化
+  switchMode(ScheduleState.focusMode);
+}, '专注');
+
+// 注册：统计页面
+registerRoute('stats', async (root) => {
+  root.innerHTML = '';
+  const app = U.el('div', { class: 'schedule-app' });
+
+  const topBar = U.el('div', { class: 'schedule-top-bar' }, [
+    U.el('div', { class: 'schedule-menu-btn', onclick: () => { location.hash = '#/schedule'; } }, '‹'),
+    U.el('div', { class: 'schedule-avatar' }, '📊')
+  ]);
+  app.appendChild(topBar);
+
+  const statsPage = U.el('div', { class: 'stats-page' });
+
+  const mainTabs = U.el('div', { class: 'stats-main-tabs' });
+  ['plan', 'focus'].forEach(tab => {
+    const labels = { plan: '计划', focus: '专注' };
+    mainTabs.appendChild(U.el('div', {
+      class: `stats-main-tab ${ScheduleState.statsMainTab === tab ? 'active' : ''}`,
+      onclick: () => {
+        ScheduleState.statsMainTab = tab;
+        ScheduleState.statsSubTab = tab === 'focus' ? 'day' : 'week';
+        ScheduleState.statsRange = ScheduleState.statsSubTab;
+        navigate();
+      }
+    }, labels[tab]));
+  });
+  statsPage.appendChild(mainTabs);
+
+  const rangeConfigs = {
+    focus: [
+      { key: 'day', label: '日' },
+      { key: 'week', label: '周' },
+      { key: 'month', label: '月' },
+      { key: 'custom', label: '自定义' }
+    ],
+    plan: [
+      { key: 'week', label: '周' },
+      { key: 'month', label: '月' },
+      { key: 'year', label: '年' },
+      { key: 'custom', label: '自定义' }
+    ]
+  };
+  const currentRanges = rangeConfigs[ScheduleState.statsMainTab];
+
+  const rangeTabs = U.el('div', { class: 'stats-range-tabs' });
+  currentRanges.forEach(r => {
+    rangeTabs.appendChild(U.el('div', {
+      class: `stats-range-tab ${ScheduleState.statsSubTab === r.key ? 'active' : ''}`,
+      onclick: () => { ScheduleState.statsSubTab = r.key; ScheduleState.statsRange = r.key; navigate(); }
+    }, r.label));
+  });
+  statsPage.appendChild(rangeTabs);
+
+  let startDate, endDate;
+  const now = new Date();
+  const subTab = ScheduleState.statsSubTab;
+  if (subTab === 'day') {
+    startDate = new Date(now); startDate.setHours(0, 0, 0, 0);
+    endDate = new Date(now); endDate.setHours(23, 59, 59, 999);
+  } else if (subTab === 'week') {
+    const dayOfWeek = now.getDay() || 7;
+    startDate = new Date(now); startDate.setDate(now.getDate() - dayOfWeek + 1);
+    endDate = new Date(startDate); endDate.setDate(startDate.getDate() + 6);
+  } else if (subTab === 'month') {
+    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  } else if (subTab === 'year') {
+    startDate = new Date(now.getFullYear(), 0, 1);
+    endDate = new Date(now.getFullYear(), 11, 31);
+  } else {
+    startDate = new Date(now); startDate.setDate(now.getDate() - 30);
+    endDate = new Date(now);
+  }
+  const rangeLabel = `${fmtDate2(startDate)} - ${fmtDate2(endDate)}`;
+  statsPage.appendChild(U.el('div', { class: 'stats-range' }, `📅 ${rangeLabel}`));
+
+  if (ScheduleState.statsMainTab === 'focus') {
+    const focusData = await getFocusData(fmtDate2(startDate), fmtDate2(endDate));
+
+    const todayFocusMin = Math.round(focusData.todayFocusMs / 60000);
+    const yesterdayFocusMin = Math.round(focusData.yesterdayFocusMs / 60000);
+    const totalFocusMin = Math.round(focusData.totalFocusMs / 60000);
+    const todayTrend = focusData.todayPomodoros === focusData.yesterdayPomodoros && todayFocusMin === yesterdayFocusMin ? '持平' : (focusData.todayPomodoros > focusData.yesterdayPomodoros ? '↑ 增加' : '↓ 减少');
+    const durationTrend = todayFocusMin === yesterdayFocusMin ? '持平' : (todayFocusMin > yesterdayFocusMin ? '↑ 增加' : '↓ 减少');
+
+    const statsCards = U.el('div', { class: 'stats-cards' }, [
+      U.el('div', { class: 'stats-card' }, [
+        U.el('div', { class: 'stats-card-value' }, String(focusData.todayPomodoros)),
+        U.el('div', { class: 'stats-card-label' }, '今日番茄'),
+        U.el('div', { class: 'stats-trend' }, `较昨日${todayTrend}`)
+      ]),
+      U.el('div', { class: 'stats-card' }, [
+        U.el('div', { class: 'stats-card-value' }, String(todayFocusMin)),
+        U.el('div', { class: 'stats-card-label' }, '今日专注时长（分钟）'),
+        U.el('div', { class: 'stats-trend' }, `较昨日${durationTrend}`)
+      ]),
+      U.el('div', { class: 'stats-card highlight' }, [
+        U.el('div', { class: 'stats-card-value' }, String(focusData.totalPomodoros)),
+        U.el('div', { class: 'stats-card-label' }, '总番茄数（个）'),
+        U.el('div', { class: 'stats-trend' }, '累计完成')
+      ]),
+      U.el('div', { class: 'stats-card highlight' }, [
+        U.el('div', { class: 'stats-card-value' }, String(totalFocusMin)),
+        U.el('div', { class: 'stats-card-label' }, '总专注时长（分钟）'),
+        U.el('div', { class: 'stats-trend' }, '累计专注')
+      ])
+    ]);
+    statsPage.appendChild(statsCards);
+
+    const chartSection = U.el('div', { class: 'chart-section' }, [
+      U.el('div', { class: 'chart-title' }, '📊 专注分布')
+    ]);
+
+    const catCount = {};
+    Object.entries(focusData.catStats).forEach(([cat, info]) => {
+      catCount[cat] = info.count;
+    });
+    const totalForChart = Object.values(catCount).reduce((a, b) => a + b, 0);
+    const pieSvg = createPieChart(catCount, totalForChart);
+    chartSection.appendChild(U.el('div', { class: 'pie-chart-container' }, [pieSvg]));
+
+    const legend = U.el('div', { class: 'chart-legend' });
+    const catLabels = {
+      work: '工作', life: '生活', study: '学习', health: '健康',
+      other: '其他', uncategorized: '未分类'
+    };
+    const catColorMap = {
+      work: '#42A5F5', life: '#EC407A', study: '#66BB6A',
+      health: '#FFA726', other: '#AB47BC', uncategorized: '#9E9E9E'
+    };
+    getCustomCategories().forEach(c => {
+      catLabels[c.id] = c.name;
+      catColorMap[c.id] = c.color;
+    });
+    Object.entries(catCount).forEach(([key, count]) => {
+      if (count === 0 && key !== (ScheduleState.statsFilter === 'category' ? ScheduleState.currentFilter : '')) return;
+      const percent = totalForChart > 0 ? Math.round((count / totalForChart) * 100) : 0;
+      legend.appendChild(U.el('div', { class: 'chart-legend-item' }, [
+        U.el('div', { class: 'chart-legend-left' }, [
+          U.el('div', { class: 'chart-legend-dot', style: `background: ${catColorMap[key] || '#BDBDBD'}` }),
+          U.el('div', { class: 'chart-legend-label' }, catLabels[key] || key)
+        ]),
+        U.el('div', {}, [
+          U.el('span', { class: 'chart-legend-value' }, `${count}次`),
+          U.el('span', { class: 'chart-legend-percent' }, `${percent}%`)
+        ])
+      ]));
+    });
+    chartSection.appendChild(legend);
+
+    const filterBar = U.el('div', { class: 'stats-filter-tabs' });
+    ['plan', 'category'].forEach(f => {
+      const labels = { plan: '计划', category: '分类' };
+      filterBar.appendChild(U.el('div', {
+        class: `stats-filter-tab ${ScheduleState.statsFilter === f ? 'active' : ''}`,
+        onclick: () => { ScheduleState.statsFilter = f; navigate(); }
+      }, labels[f]));
+    });
+    chartSection.appendChild(U.el('div', { style: 'margin-top:16px;' }, [filterBar]));
+
+    statsPage.appendChild(chartSection);
+  } else {
+    const tasks = await getTasksInRange(fmtDate2(startDate), fmtDate2(endDate));
+    const totalTasks = tasks.length;
+    const doneTasks = tasks.filter(t => t.done).length;
+    const overdueTasks = tasks.filter(t => !t.done && t.deadline && new Date(t.deadline) < now).length;
+    const completionRate = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+    const lastWeekStart = new Date(now);
+    lastWeekStart.setDate(now.getDate() - 14);
+    const lastWeekEnd = new Date(now);
+    lastWeekEnd.setDate(now.getDate() - 7);
+    const lastWeekTasks = await getTasksInRange(fmtDate2(lastWeekStart), fmtDate2(lastWeekEnd));
+    const lastWeekDone = lastWeekTasks.filter(t => t.done).length;
+    const lastWeekRate = lastWeekTasks.length > 0 ? Math.round((lastWeekDone / lastWeekTasks.length) * 100) : 0;
+    const rateTrend = completionRate === lastWeekRate ? '较上周持平' : (completionRate > lastWeekRate ? `较上周↑${completionRate - lastWeekRate}%` : `较上周↓${lastWeekRate - completionRate}%`);
+
+    const statsCards = U.el('div', { class: 'stats-cards' }, [
+      U.el('div', { class: 'stats-card highlight' }, [
+        U.el('div', { class: 'stats-card-value' }, String(doneTasks)),
+        U.el('div', { class: 'stats-card-label' }, '已完成（个）'),
+        U.el('div', { class: 'stats-trend' }, '完成情况')
+      ]),
+      U.el('div', { class: 'stats-card' }, [
+        U.el('div', { class: 'stats-card-value' }, String(totalTasks)),
+        U.el('div', { class: 'stats-card-label' }, '应完成（个）'),
+        U.el('div', { class: 'stats-trend' }, '计划总数')
+      ]),
+      U.el('div', { class: 'stats-card' }, [
+        U.el('div', { class: 'stats-card-value' }, String(overdueTasks)),
+        U.el('div', { class: 'stats-card-label' }, '已逾期（个）'),
+        U.el('div', { class: 'stats-trend' }, '需要关注')
+      ]),
+      U.el('div', { class: 'stats-card highlight' }, [
+        U.el('div', { class: 'stats-card-value' }, `${completionRate}%`),
+        U.el('div', { class: 'stats-card-label' }, '完成率'),
+        U.el('div', { class: 'stats-trend' }, rateTrend)
+      ])
+    ]);
+    statsPage.appendChild(statsCards);
+
+    const chartSection = U.el('div', { class: 'chart-section' }, [
+      U.el('div', { class: 'chart-title' }, '📊 打卡分布')
+    ]);
+
+    const catCount = {};
+    if (ScheduleState.statsFilter === 'priority') {
+      ['high', 'mid', 'low'].forEach(p => {
+        catCount[p] = tasks.filter(t => t.priority === p).length;
+      });
+    } else {
+      const allCatKeys = [...Object.keys(CATEGORY_MAP), ...getCustomCategories().map(c => c.id)];
+      allCatKeys.forEach(key => {
+        catCount[key] = tasks.filter(t => t.category === key).length;
+      });
+    }
+    const totalForChart = Object.values(catCount).reduce((a, b) => a + b, 0);
+    const pieSvg = createPieChart(catCount, totalForChart);
+    chartSection.appendChild(U.el('div', { class: 'pie-chart-container' }, [pieSvg]));
+
+    const legend = U.el('div', { class: 'chart-legend' });
+    if (ScheduleState.statsFilter === 'priority') {
+      const priorityColors = { high: '#EF5350', mid: '#FFB74D', low: '#66BB6A' };
+      const priorityLabels = { high: '高优先级', mid: '中优先级', low: '低优先级' };
+      Object.entries(catCount).forEach(([key, count]) => {
+        const percent = totalForChart > 0 ? Math.round((count / totalForChart) * 100) : 0;
+        legend.appendChild(U.el('div', { class: 'chart-legend-item' }, [
+          U.el('div', { class: 'chart-legend-left' }, [
+            U.el('div', { class: 'chart-legend-dot', style: `background: ${priorityColors[key] || '#BDBDBD'}` }),
+            U.el('div', { class: 'chart-legend-label' }, priorityLabels[key] || key)
+          ]),
+          U.el('div', {}, [
+            U.el('span', { class: 'chart-legend-value' }, `${count}个`),
+            U.el('span', { class: 'chart-legend-percent' }, `${percent}%`)
+          ])
+        ]));
+      });
+    } else {
+      const allCats = getAllCategories().filter(c => !c.isAll && !c.isNone);
+      allCats.forEach(cat => {
+        const count = catCount[cat.value] || 0;
+        const percent = totalForChart > 0 ? Math.round((count / totalForChart) * 100) : 0;
+        legend.appendChild(U.el('div', { class: 'chart-legend-item' }, [
+          U.el('div', { class: 'chart-legend-left' }, [
+            U.el('div', { class: 'chart-legend-dot', style: `background: ${cat.color}` }),
+            U.el('div', { class: 'chart-legend-label' }, cat.label)
+          ]),
+          U.el('div', {}, [
+            U.el('span', { class: 'chart-legend-value' }, `${count}个`),
+            U.el('span', { class: 'chart-legend-percent' }, `${percent}%`)
+          ])
+        ]));
+      });
+    }
+    chartSection.appendChild(legend);
+
+    const filterBar = U.el('div', { class: 'stats-filter-tabs' });
+    ['priority', 'category'].forEach(f => {
+      const labels = { priority: '优先级', category: '分类' };
+      filterBar.appendChild(U.el('div', {
+        class: `stats-filter-tab ${ScheduleState.statsFilter === f ? 'active' : ''}`,
+        onclick: () => { ScheduleState.statsFilter = f; navigate(); }
+      }, labels[f]));
+    });
+    chartSection.appendChild(U.el('div', { style: 'margin-top:16px;' }, [filterBar]));
+
+    statsPage.appendChild(chartSection);
+  }
+
+  app.appendChild(statsPage);
+  root.appendChild(app);
+}, '统计');
+
+function getCatColor(cat) {
+  const colors = { work: '#42A5F5', life: '#EC407A', study: '#66BB6A', health: '#FFA726', other: '#AB47BC' };
+  return colors[cat] || '#BDBDBD';
+}
+
+// 创建 SVG 饼图
+function createPieChart(data, total) {
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const size = 180;
+  const center = size / 2;
+  const radius = 80;
+  const innerRadius = 45;
+  
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
+  
+  let startAngle = -Math.PI / 2;
+  const entries = Object.entries(data).filter(([_, v]) => v > 0);
+  
+  if (total === 0) {
+    // 空状态：显示灰色圆环
+    const circle = document.createElementNS(svgNS, 'circle');
+    circle.setAttribute('cx', center);
+    circle.setAttribute('cy', center);
+    circle.setAttribute('r', (radius + innerRadius) / 2);
+    circle.setAttribute('fill', 'none');
+    circle.setAttribute('stroke', '#E0E0E0');
+    circle.setAttribute('stroke-width', radius - innerRadius);
+    svg.appendChild(circle);
+  } else {
+    entries.forEach(([cat, count]) => {
+      const angle = (count / total) * Math.PI * 2;
+      const endAngle = startAngle + angle;
+      const color = getCatColor(cat);
+      
+      // 计算圆弧路径
+      const x1 = center + radius * Math.cos(startAngle);
+      const y1 = center + radius * Math.sin(startAngle);
+      const x2 = center + radius * Math.cos(endAngle);
+      const y2 = center + radius * Math.sin(endAngle);
+      const x3 = center + innerRadius * Math.cos(endAngle);
+      const y3 = center + innerRadius * Math.sin(endAngle);
+      const x4 = center + innerRadius * Math.cos(startAngle);
+      const y4 = center + innerRadius * Math.sin(startAngle);
+      
+      const largeArc = angle > Math.PI ? 1 : 0;
+      
+      const pathData = [
+        `M ${x1} ${y1}`,
+        `A ${radius} ${radius} 0 ${largeArc} 1 ${x2} ${y2}`,
+        `L ${x3} ${y3}`,
+        `A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${x4} ${y4}`,
+        'Z'
+      ].join(' ');
+      
+      const path = document.createElementNS(svgNS, 'path');
+      path.setAttribute('d', pathData);
+      path.setAttribute('fill', color);
+      svg.appendChild(path);
+      
+      startAngle = endAngle;
+    });
+  }
+  
+  // 中心文字
+  const centerGroup = document.createElementNS(svgNS, 'g');
+  const totalText = document.createElementNS(svgNS, 'text');
+  totalText.setAttribute('x', center);
+  totalText.setAttribute('y', center - 5);
+  totalText.setAttribute('text-anchor', 'middle');
+  totalText.setAttribute('font-size', '28');
+  totalText.setAttribute('font-weight', '800');
+  totalText.setAttribute('fill', '#5D4037');
+  totalText.textContent = total > 0 ? total : '0';
+  
+  const labelText = document.createElementNS(svgNS, 'text');
+  labelText.setAttribute('x', center);
+  labelText.setAttribute('y', center + 18);
+  labelText.setAttribute('text-anchor', 'middle');
+  labelText.setAttribute('font-size', '12');
+  labelText.setAttribute('fill', '#A1887F');
+  labelText.textContent = '完成打卡';
+  
+  centerGroup.appendChild(totalText);
+  centerGroup.appendChild(labelText);
+  svg.appendChild(centerGroup);
+  
+  return svg;
+}
+
+// 给底部导航绑定点击事件
+document.addEventListener('DOMContentLoaded', () => {
+  const nav = document.getElementById('bottom-nav');
+  if (nav) {
+    nav.addEventListener('click', (e) => {
+      const item = e.target.closest('.bottom-nav-item');
+      if (!item) return;
+      const target = item.dataset.bnav;
+      if (target === 'profile2') {
+        e.preventDefault();
+        location.hash = '#/profile';
+      }
+    });
+  }
+});
 
 boot().catch(e => {
   console.error('boot 崩溃:', e);
