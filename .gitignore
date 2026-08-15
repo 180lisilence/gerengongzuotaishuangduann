@@ -1,0 +1,29 @@
+﻿# Gradle / Android
+**/.gradle/
+**/build/
+**/.idea/
+**/*.iml
+**/local.properties
+
+# Gradle wrapper jar（二进制大，保持）
+!gradle/wrapper/gradle-wrapper.jar
+
+# OS
+.DS_Store
+Thumbs.db
+
+# APK 只保留 release 里的
+**/*.apk
+!release/*.apk
+
+# Node
+**/node_modules/
+
+# 备份
+**/backup/
+**/*_backup*/
+
+# 临时
+*.log
+*.tmp
+.bak_*

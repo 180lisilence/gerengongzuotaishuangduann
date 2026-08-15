@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>个人工作台</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">🏠</div>
+      <div class="logo-text">个人工作台</div>
+    </div>
+    <nav class="nav" id="main-nav">
+      <a href="#/home" class="nav-item" data-route="home"><span class="nav-icon">🏠</span><span>首页总览</span></a>
+      <a href="#/todayPlan" class="nav-item" data-route="todayPlan"><span class="nav-icon">📅</span><span>今日计划</span></a>
+      <a href="#/media" class="nav-item" data-route="media"><span class="nav-icon">📱</span><span>自媒体</span></a>
+      <a href="#/develop" class="nav-item" data-route="develop"><span class="nav-icon">💻</span><span>开发工作</span></a>
+      <a href="#/consult" class="nav-item" data-route="consult"><span class="nav-icon">💼</span><span>咨询工作</span></a>
+      <a href="#/fitness" class="nav-item" data-route="fitness"><span class="nav-icon">💪</span><span>健身计划</span></a>
+      <a href="#/diet" class="nav-item" data-route="diet"><span class="nav-icon">🍱</span><span>饮食计划</span></a>
+      <a href="#/game" class="nav-item" data-route="game"><span class="nav-icon">🎮</span><span>游戏娱乐</span></a>
+      <a href="#/ai" class="nav-item" data-route="ai"><span class="nav-icon">🤖</span><span>AI 对话</span></a>
+      <a href="#/profile" class="nav-item" data-route="profile"><span class="nav-icon">👤</span><span>个人中心</span></a>
+      <a href="#/setting" class="nav-item" data-route="setting"><span class="nav-icon">⚙️</span><span>数据与设置</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="status-chip" id="db-status">● 数据已持久化</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="page-title" id="page-title">首页总览</div>
+      <div class="topbar-right">
+        <div class="clock" id="clock"></div>
+      </div>
+    </header>
+    <section class="content" id="content"></section>
+  </main>
+</div>
+
+<div class="modal-backdrop" id="modal-backdrop" style="display:none">
+  <div class="modal" id="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title"></div>
+      <button class="modal-close" id="modal-close">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<div class="ai-fab" id="ai-fab" title="AI 快捷对话">
+  <span>🤖</span>
+  <div class="ai-fab-badge" id="ai-fab-badge" style="display:none"></div>
+</div>
+
+<div class="ai-quick-panel" id="ai-quick-panel" style="display:none">
+  <div class="ai-quick-header">
+    <div class="ai-quick-title">🤖 AI 快捷对话</div>
+    <button class="ai-quick-close" id="ai-quick-close">✕</button>
+  </div>
+  <div class="ai-quick-body" id="ai-quick-body"></div>
+  <div class="ai-quick-input-wrap">
+    <textarea id="ai-quick-input" placeholder="输入消息，Enter 发送，Shift+Enter 换行..." rows="2"></textarea>
+    <button id="ai-quick-send" class="btn btn-primary btn-sm">发送</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

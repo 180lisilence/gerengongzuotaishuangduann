@@ -1,0 +1,143 @@
+// app 模块级 Gradle 配置
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// ========== 版本管理：从 version.properties 读取版本号 ==========
+def versionPropsFile = rootProject.file('version.properties')
+def versionProps = new Properties()
+if (versionPropsFile.exists()) {
+    versionProps.load(new FileInputStream(versionPropsFile))
+}
+def appVersionName = versionProps.getProperty('versionName', '1.0.0')
+def appVersionCode = versionProps.getProperty('versionCode', '1').toInteger()
+
+android {
+    namespace 'com.personal.workbench'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.personal.workbench"
+        minSdk 24          // 兼容 Android 7.0 及以上
+        targetSdk 35       // 目标最新版本
+        versionCode appVersionCode
+        versionName appVersionName
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // 自定义 APK 输出目录和文件名
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            // 文件名格式：个人工作台_v1.0.0_debug.apk
+            outputFileName = "个人工作台_v${variant.versionName}_${variant.buildType.name}.apk"
+        }
+    }
+
+    // 构建时自动把版本号写入 strings.xml 的 app_name
+    android.applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def processResourcesTask = output.processResourcesProvider.get()
+            processResourcesTask.doFirst {
+                def stringsFile = file("src/main/res/values/strings.xml")
+                if (stringsFile.exists()) {
+                    def content = stringsFile.getText('UTF-8')
+                    content = content.replaceAll(
+                        /<string name="app_name">[^<]*<\/string>/,
+                        "<string name=\"app_name\">个人工作台 v${variant.versionName}</string>"
+                    )
+                    stringsFile.write(content, 'UTF-8')
+                    println "app_name 已更新为: 个人工作台 v${variant.versionName}"
+                }
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    buildFeatures {
+        viewBinding true
+    }
+}
+
+dependencies {
+    // AndroidX 核心库
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.webkit:webkit:1.10.0'
+}
+
+// ========== 构建前自动备份旧版本APK ==========
+tasks.register('backupOldApk') {
+    group = 'build'
+    description = '构建前备份旧版本APK到 backup/ 目录'
+    doLast {
+        def apkDir = file("${buildDir}/outputs/apk/debug")
+        def backupDir = rootProject.file('backup')
+        if (!backupDir.exists()) backupDir.mkdirs()
+
+        if (apkDir.exists()) {
+            apkDir.listFiles().each { apkFile ->
+                if (apkFile.name.endsWith('.apk')) {
+                    def backupFile = new File(backupDir, apkFile.name)
+                    if (backupFile.exists()) backupFile.delete()
+                    apkFile.renameTo(backupFile)
+                    println "已备份: ${apkFile.name} -> backup/${apkFile.name}"
+                }
+            }
+        } else {
+            println "首次构建，无需备份"
+        }
+    }
+}
+
+// ========== 构建后自动递增版本号（+0.1） ==========
+tasks.register('bumpVersion') {
+    group = 'build'
+    description = '构建完成后版本号 +0.1'
+    doLast {
+        def propsFile = rootProject.file('version.properties')
+        def props = new Properties()
+        if (propsFile.exists()) {
+            props.load(new FileInputStream(propsFile))
+        }
+        def oldName = props.getProperty('versionName', '1.0.0')
+        def oldCode = props.getProperty('versionCode', '1').toInteger()
+
+        // 版本号 +0.1（保留一位小数）
+        def parts = oldName.split('\\.')
+        def minor = parts.length >= 2 ? parts[1].toInteger() : 0
+        def major = parts.length >= 1 ? parts[0].toInteger() : 1
+        minor += 1
+        def newName = "${major}.${minor}.0"
+
+        props.setProperty('versionName', newName)
+        props.setProperty('versionCode', (oldCode + 1).toString())
+        props.store(new FileOutputStream(propsFile), "版本号自动管理 - 上次构建: ${oldName}")
+
+        println "版本号已更新: ${oldName} -> ${newName} (versionCode: ${oldCode} -> ${oldCode + 1})"
+    }
+}
+
+// 将备份和版本递增挂到 debug 构建流程上
+tasks.configureEach { task ->
+    if (task.name == 'assembleDebug') {
+        task.dependsOn 'backupOldApk'
+        task.finalizedBy 'bumpVersion'
+    }
+}
