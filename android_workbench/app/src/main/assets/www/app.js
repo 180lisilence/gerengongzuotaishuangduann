@@ -247,7 +247,7 @@ function inputGroup(fieldDefs, initial = {}) {
     return U.el('div', { class: 'form-field' }, [
       def.label ? U.el('label', { class: 'form-label', text: def.label + (def.required ? ' *' : '') }) : null,
       input
-    ]).filter(Boolean);
+    ]);
   }));
   wrap.getData = () => {
     const out = {};
@@ -545,7 +545,7 @@ registerRoute('todayPlan', (root) => renderListPage(root, 'todos', '今日计划
       item.filePath ? U.el('div', { class: 'file-linked', text: '📎 ' + item.filePath }) : null
     ]),
     U.el('button', { class: 'btn-icon', title: '删除', onclick: () => Modal.confirm('删除任务', '将移入回收站', () => DBdelete('todos', item.id).then(() => root._refresh()), '删除', '取消', true) }, '🗑️')
-  ]).filter(c => c);
+  ]);
 }), '今日计划');
 
 // ============ 模块：自媒体 ============
@@ -658,7 +658,7 @@ registerRoute('develop', async (root) => {
           ]),
           U.el('button', { class: 'btn-icon', title: '删除', onclick: (e) => { e.stopPropagation(); Modal.confirm('删除任务', '', () => DBdelete('develop', t.id).then(refresh), '删除', '取消', true); } }, '🗑️')
         ]))
-      ]).filter(c => c);
+      ]);
       listWrap.appendChild(card);
     });
     tasks.filter(t => !t.projectId).forEach(t => {
@@ -725,7 +725,7 @@ registerRoute('fitness', (root) => renderListPage(root, 'fitness', '健身计划
       item.notes ? U.el('div', { class: 'item-sub', text: item.notes }) : null
     ]),
     U.el('button', { class: 'btn-icon', title: '删除', onclick: () => Modal.confirm('删除记录', '移入回收站', () => DBdelete('fitness', item.id).then(() => root._refresh()), '删除', '取消', true) }, '🗑️')
-  ]).filter(Boolean);
+  ]);
 }), '健身计划');
 
 // ============ 模块：饮食计划 ============
