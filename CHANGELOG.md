@@ -4,6 +4,33 @@
 
 ---
 
+## [2026-08-15 下午] 新增 README.md 项目主文档
+
+**备份目录**：`源代码_backup_20260815_141323`
+**新增文件**：`README.md`
+
+### 📄 文档内容
+
+创建完整的项目主文档，覆盖以下板块：
+
+1. **项目简介**：定位、双平台说明（Electron + Android WebView）
+2. **技术栈**：前端/封装/构建/AI 集成全套技术清单
+3. **目录结构**：Project02 根目录下所有子项目的文件树
+4. **功能模块**：11 个路由的功能说明 + 对应 IndexedDB Store 映射
+5. **AI 集成详解**：5 个 Provider 配置表、API Key 格式注意事项、消息角色校验、Markdown 渲染能力
+6. **数据架构**：IndexedDB v3 12 个 Store 列表 + localStorage 后备项 + 降级策略
+7. **构建与部署**：
+   - PC 端 Electron 开发/打包流程
+   - Android 端 Gradle 构建 + 自动备份 + 版本递增机制
+   - APK 命名格式 + app_name 自动更新
+   - `install_to_mumu.ps1` 一键安装脚本使用说明
+   - Android WebView 关键配置清单
+   - Android 兼容性 Shim（Notification mock）
+8. **开发工作流规范**：版本号规则、备份规则、变更记录、多端同步清单
+9. **已知问题与历史踩坑**：9 个已踩过的坑的原因 + 解决方案速查表
+
+---
+
 ## [2026-08-15 下午] Bug 修复 + EXE 重打包 + GitHub/Android 同步
 
 **修复**：个人中心「编辑资料」保存崩溃（`Cannot read properties of null (reading 'value')`）

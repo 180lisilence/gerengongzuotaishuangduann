@@ -1,4 +1,4 @@
-﻿# Gradle / Android
+# Gradle / Android
 **/.gradle/
 **/build/
 **/.idea/
@@ -26,4 +26,8 @@ Thumbs.db
 # 临时
 *.log
 *.tmp
-.bak_*
+*.bak_*
+**/*.bak_*
+
+# 测试文件
+**/test.html
